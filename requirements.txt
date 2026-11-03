@@ -1,4 +1,10 @@
-# 运行时依赖：会被打进 APK，只能有 flet 本体。
+# 运行时依赖：会被打进 APK。
 # flet-cli 是构建期工具（CI 环境单独 pip 安装），写进项目依赖会被
 # serious_python 打进 APK，并因 watchdog 无 Android wheel 导致构建失败。
+#
+# flet-audio 必须显式安装：flet 0.26 起 audio 控件从核心包拆出，
+# 0.28 的移动端客户端不再内置 "audio" 控件（Android 上会报
+# "Unknown control: audio" 且无声）。装上它后 flet build 会自动把
+# flutter/flet_audio（audioplayers 插件）编进 APK。
 flet==0.28.3
+flet-audio==0.1.0
