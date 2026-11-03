@@ -1,4 +1,4 @@
-# 注意：flet 0.28 把命令行工具拆到独立包 flet-cli，
-# 只装 flet 的话 `flet build` 命令不存在（已在本机实测确认）。
+# 运行时依赖：会被打进 APK，只能有 flet 本体。
+# flet-cli 是构建期工具（CI 环境单独 pip 安装），写进项目依赖会被
+# serious_python 打进 APK，并因 watchdog 无 Android wheel 导致构建失败。
 flet==0.28.3
-flet-cli==0.28.3

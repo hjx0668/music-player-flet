@@ -4,9 +4,9 @@ version = "1.0.0"
 description = "在线音乐搜索与流式播放器（Flet 版，支持手机/车机 APK）"
 requires-python = ">=3.10"
 dependencies = [
-    # 注意：flet 0.28 把 CLI 拆到独立包 flet-cli，云端构建两者都需要
+    # 只放运行时依赖；flet-cli 是构建期工具（CI 里单独 pip 装），
+    # 写进项目依赖会被 serious_python 打进 APK 并因 watchdog 无 Android wheel 而失败
     "flet==0.28.3",
-    "flet-cli==0.28.3",
 ]
 
 [tool.flet]
