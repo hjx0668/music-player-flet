@@ -7,6 +7,9 @@ dependencies = [
     # 只放运行时依赖；flet-cli 是构建期工具（CI 里单独 pip 装），
     # 写进项目依赖会被 serious_python 打进 APK 并因 watchdog 无 Android wheel 而失败
     "flet==0.28.3",
+    # audio 控件自 flet 0.26 拆出独立包；不装的话 Android 客户端会报
+    # "Unknown control: audio" 且无声（flet build 会自动编入其 Flutter 插件）
+    "flet-audio==0.1.0",
 ]
 
 [tool.flet]
