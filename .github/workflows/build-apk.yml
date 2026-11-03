@@ -33,9 +33,20 @@ jobs:
       - name: Accept Android licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
+      # 缓存 flet 自带的 Flutter SDK 与 Gradle 缓存，避免每次构建都重新下载
+      - name: Cache Flutter/Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.flet
+            ~/.gradle/caches
+          key: flet-0.28.3-flutter-gradle-${{ hashFiles('requirements.txt') }}
+
       # ubuntu-latest 自带 Android SDK；Flutter SDK 由 flet build 自动下载。
-      # 注意 flet 0.28 的 --android-permissions 要求 "<权限名>=True|False" 格式
+      # 注意 flet 0.28 的 --android-permissions 要求 "<权限名>=True|False" 格式。
+      # timeout 防止 runner 侧下载卡死把 job 挂满一小时
       - name: Build APK
+        timeout-minutes: 40
         run: >
           flet build apk
           --split-per-abi
