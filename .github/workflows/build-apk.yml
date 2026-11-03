@@ -10,20 +10,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 官方 Flet 构建动作：自动安装 uv、flet-cli、Flutter SDK、Android SDK
-      # （无 flet_version 输入；flet 版本由 pyproject.toml 的 dependencies 锁定）
-      - name: Build APK (flet-build-action)
-        id: build
-        uses: flet-dev/flet-build-action@main
+      # flet 0.28.x 的 CLI 与新版 flet 的 `--version --json` 不兼容，
+      # 官方 flet-build-action（v1/main 均为 uv 新版族）无法解析，故手动装配
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          target: apk
-          # split 出 arm64/v7a/x64 单独 APK，方便直接装车机/手机
-          extra-args: "--split-per-abi --android-permissions android.permission.INTERNET"
+          python-version: "3.12"
 
-      # 构建动作默认产出平台归档（zip），直接把归档上传为 Artifact
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install flet CLI
+        run: |
+          python -m pip install --upgrade pip
+          pip install "flet==0.28.3" "flet-cli==0.28.3"
+          flet --version
+
+      # ubuntu-latest 自带 Android SDK 且许可已接受；Flutter SDK 由 flet build 自动下载
+      - name: Build APK
+        run: >
+          flet build apk
+          --split-per-abi
+          --android-permissions android.permission.INTERNET
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: music-player-apk
-          path: ${{ steps.build.outputs.archive-path }}
+          path: build/apk/**/*.apk
           if-no-files-found: error
