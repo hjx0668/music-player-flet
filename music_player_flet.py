@@ -13,12 +13,15 @@
 5. 某首歌取地址失败时自动跳过，继续下一首
 
 运行（桌面/手机调试）：
-    pip install "flet>=0.24,<0.29"
+    pip install "flet>=0.24,<0.29" flet-audio==0.1.0
     python music_player_flet.py
 
 打包 APK（手机/车机安装）：
-    flet build apk --android-permissions android.permission.INTERNET
+    flet build apk --split-per-abi --android-permissions android.permission.INTERNET=True
     生成 build/ 下的 apk 拷到手机或车机安装即可（车机需为 Android 系统）
+
+注意：audio 控件自 flet 0.26 起拆到 flet-audio 包，移动端必须安装该包，
+否则界面会报 "Unknown control: audio" 且无声。
 
 说明：播放直接使用 Audio 组件流式播放网络地址，无需下载整首到本地。
 """
@@ -232,6 +235,8 @@ class MusicApp:
         self._duration_ms = 0
         self._fail_streak = 0              # 连续取地址失败计数（防死循环连播）
         self._want_play = False            # 待播放标志：媒体加载完成(on_loaded)后真正 play
+        self._loaded_flag = False          # 客户端是否已回报 on_loaded（兜底计时判断用）
+        self._play_seq = 0                 # 播放序号：切歌后让旧的兜底计时失效
         self.volume = 80                   # 应用内音量 0-100（持久化到 client_storage）
         self.muted = False                 # 静音标志（跨歌曲、跨启动保持）
         self._pre_mute_volume = 80         # 静音前的音量，恢复用
@@ -1129,19 +1134,31 @@ class MusicApp:
         autoplay=False：等 on_loaded（媒体真正加载完成）后再显式 play()，
         避免在加载完成前发 play 命令被客户端忽略导致无声"""
         if self.audio is None:
-            self.audio = _AudioControl(
-                src=url,
-                autoplay=False,
-                volume=self._effective_volume(),  # 新建即带上当前音量/静音
-                on_loaded=self._on_audio_loaded,
-                on_duration_changed=self._on_duration_changed,
-                on_position_changed=self._on_position_changed,
-                on_state_changed=self._on_state_changed,
-            )
+            self.audio = self._create_audio_control(url)
             self.page.overlay.append(self.audio)
         else:
             self.audio.src = url
             self._apply_volume_to_audio()  # 每次切歌复用组件时重申当前音量
+
+    def _create_audio_control(self, url):
+        """按运行平台选择实现：
+        - Android / iOS：必须用 flet_audio 扩展（flet 0.26 起 audio 控件从核心包
+          拆出，移动端客户端不再内置，用核心 ft.Audio 会报 "Unknown control: audio" 且无声）
+        - 桌面：沿用 flet 核心 Audio（已长期验证可用）
+        """
+        plat = str(getattr(self.page, "platform", "") or "").lower()
+        mobile = ("android" in plat) or ("ios" in plat)
+        cls = _AudioControl if mobile else (getattr(ft, "Audio", None) or _AudioControl)
+        print(f"[audio] platform={plat or '?'} using={getattr(cls, '__module__', '?')}")
+        return cls(
+            src=url,
+            autoplay=False,
+            volume=self._effective_volume(),  # 新建即带上当前音量/静音
+            on_loaded=self._on_audio_loaded,
+            on_duration_changed=self._on_duration_changed,
+            on_position_changed=self._on_position_changed,
+            on_state_changed=self._on_state_changed,
+        )
 
     def _play_song(self, song):
         """后台线程：取播放地址并交给 Audio 组件播放"""
@@ -1179,6 +1196,8 @@ class MusicApp:
         self.time_text.value = f"00:00 / {fmt_time(self._duration_ms / 1000)}"
         self._paused_flag = False
         self._want_play = True
+        self._loaded_flag = False          # 新歌：等待客户端 on_loaded 回报
+        self._play_seq += 1                # 使上一首的兜底计时失效
         self._set_pause_visual(False)
         try:
             self._ensure_audio(url)
@@ -1188,6 +1207,11 @@ class MusicApp:
             self._set_status(f"播放失败: {ex}")
             return
         self._set_status(f"正在加载音频: {name} - {artist}")
+        # 兜底：若客户端迟迟不回报 on_loaded（Android 上个别机型/编码会这样），
+        # 3 秒后主动 play() 一次，并把结果写进状态栏，避免静默无声
+        threading.Thread(
+            target=self._play_fallback_check, args=(self._play_seq, name), daemon=True
+        ).start()
         # 后台拉取并显示当前歌歌词（面板关闭时不拉）
         try:
             self._fetch_lyric_async()
@@ -1256,12 +1280,27 @@ class MusicApp:
     # ------------------------------------------------------------------
     def _on_audio_loaded(self, e=None):
         """媒体加载完成 → 此时 play() 才会真正生效"""
+        self._loaded_flag = True
         try:
             if self._want_play and self.audio is not None:
                 self.audio.play()
                 self._set_status("正在播放（客户端已确认加载）")
         except Exception as ex:
             self._set_status(f"启动播放失败: {ex}")
+
+    def _play_fallback_check(self, seq, name):
+        """兜底：3 秒内没收到 on_loaded 就主动 play()，并在状态栏说明结果"""
+        time.sleep(3.0)
+        if seq != self._play_seq or not self._want_play or self.audio is None:
+            return                      # 已切歌/已停止/组件不存在
+        if self._loaded_flag:
+            return                      # on_loaded 正常触发，无需兜底
+        try:
+            self.audio.play()
+            self._set_status(f"正在播放（未收到加载回调，已兜底启动: {name}）")
+            print("[audio] fallback play() issued (no on_loaded within 3s)")
+        except Exception as ex:
+            self._set_status(f"兜底播放失败: {ex}")
 
     def _on_duration_changed(self, e):
         d = _evt_ms(getattr(e, "data", None))
