@@ -29,12 +29,17 @@ jobs:
           pip install "flet==0.28.3" "flet-cli==0.28.3"
           flet --version
 
-      # ubuntu-latest 自带 Android SDK 且许可已接受；Flutter SDK 由 flet build 自动下载
+      # runner 上部分新版 SDK 平台许可未自动接受，先全部接受
+      - name: Accept Android licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      # ubuntu-latest 自带 Android SDK；Flutter SDK 由 flet build 自动下载。
+      # 注意 flet 0.28 的 --android-permissions 要求 "<权限名>=True|False" 格式
       - name: Build APK
         run: >
           flet build apk
           --split-per-abi
-          --android-permissions android.permission.INTERNET
+          --android-permissions android.permission.INTERNET=True
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
