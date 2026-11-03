@@ -1,0 +1,17 @@
+[project]
+name = "music-player"
+version = "1.0.0"
+description = "在线音乐搜索与流式播放器（Flet 版，支持手机/车机 APK）"
+requires-python = ">=3.10"
+dependencies = [
+    # 注意：flet 0.28 把 CLI 拆到独立包 flet-cli，云端构建两者都需要
+    "flet==0.28.3",
+    "flet-cli==0.28.3",
+]
+
+[tool.flet]
+# Android 目标 SDK 等保持模板默认
+
+[tool.flet.app]
+# 应用文件就在仓库根目录，入口为 main.py
+path = "."

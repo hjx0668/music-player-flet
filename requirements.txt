@@ -1,0 +1,4 @@
+# 注意：flet 0.28 把命令行工具拆到独立包 flet-cli，
+# 只装 flet 的话 `flet build` 命令不存在（已在本机实测确认）。
+flet==0.28.3
+flet-cli==0.28.3

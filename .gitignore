@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+
+# 本地下载器配置与产物
+config.json
+临时/
+build/
+dist/
+
+# 站点逆向分析材料（不应公开）
+_analysis/
+
+# 工作区内部文件
+.workbuddy/
+.trae/
+.vscode/

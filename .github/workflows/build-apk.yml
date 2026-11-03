@@ -1,0 +1,29 @@
+name: Build APK
+
+on:
+  workflow_dispatch: {}   # 手动触发：仓库 Actions 页 -> Build APK -> Run workflow
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 官方 Flet 构建动作：自动安装 uv、flet-cli、Flutter SDK、Android SDK
+      # （无 flet_version 输入；flet 版本由 pyproject.toml 的 dependencies 锁定）
+      - name: Build APK (flet-build-action)
+        id: build
+        uses: flet-dev/flet-build-action@main
+        with:
+          target: apk
+          # split 出 arm64/v7a/x64 单独 APK，方便直接装车机/手机
+          extra-args: "--split-per-abi --android-permissions android.permission.INTERNET"
+
+      # 构建动作默认产出平台归档（zip），直接把归档上传为 Artifact
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: music-player-apk
+          path: ${{ steps.build.outputs.archive-path }}
+          if-no-files-found: error
