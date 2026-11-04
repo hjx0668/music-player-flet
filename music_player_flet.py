@@ -284,6 +284,7 @@ class MusicApp:
         self.row_bars = []                 # 与 row_controls 一一对应的"正在播放"左侧强调条
         self._seek_target = 0              # 进度条拖动目标（秒）
         self._seek_seq = 0                 # 进度条拖动序号：让过期的兜底 seek 失效
+        self._stacked = None               # 主区是否上下堆叠（宽<760），None=尚未排布
 
         # ---- 歌词状态 ----
         self.show_lyric = True             # 歌词开关（默认勾选，持久化）
@@ -483,59 +484,40 @@ class MusicApp:
             color=C_TEXT_2,
         )
 
+        # ===== 右侧歌词栏（固定卡片，不再浮动，无拖动坐标逻辑）=====
+        self.lyric_title = ft.Text(
+            "歌词", size=12, color=C_TEXT_2,
+            max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
+        self.lyric_col = ft.Column(
+            spacing=3, tight=True,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+        self.lyric_card = ft.Container(
+            content=ft.Column(
+                [
+                    self.lyric_title,
+                    ft.Container(height=1, bgcolor=C_DIVIDER),
+                    ft.Container(content=self.lyric_col, expand=True,
+                                 alignment=ft.alignment.center),
+                ],
+                spacing=8, tight=True, expand=True,
+            ),
+            padding=ft.padding.symmetric(horizontal=12, vertical=10),
+            bgcolor=C_SURFACE,
+            border_radius=12,
+            border=ft.border.all(1, C_DIVIDER),
+            visible=self.show_lyric,
+        )
+
+        # ===== 主区：宽屏左右双栏 / 窄屏上下堆叠（_apply_main_layout 切换）=====
+        self.main_area = ft.Container(expand=True)
         page.add(
             search_row,
             actions_row,
             secondary_row,
-            self.list_view,
+            self.main_area,
             player_bar,
             self.status_text,
         )
-
-        # ===== 歌词面板（深色半透明；整块面板都是拖动热区）=====
-        # 结构：GestureDetector(负责 left/top 定位与手势) → Container(视觉层)
-        # 触摸面板任意位置都能拖动，不再只有顶部把手能拖（Android 触屏根因）
-        self._lyric_drag = {"on": False, "dx": 0, "dy": 0}
-        self.lyric_col = ft.Column(
-            spacing=4, tight=True,
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-        self.lyric_box = ft.Container(
-            width=400,
-            height=172,
-            border_radius=14,
-            padding=ft.padding.symmetric(horizontal=16, vertical=12),
-            bgcolor=_op(C_LYRIC_BG, C_LYRIC_BG_OPACITY),
-            border=ft.border.all(1, _op(C_TEXT, 0.10)),
-            shadow=ft.BoxShadow(blur_radius=16, color=_op(C_TEXT, 0.18),
-                                offset=ft.Offset(0, 6)),
-            content=ft.Column(
-                [
-                    # 顶部小横条：视觉提示"可拖动"
-                    ft.Container(width=44, height=4, border_radius=2,
-                                 bgcolor=_op(C_TEXT, 0.22)),
-                    ft.Container(content=self.lyric_col, expand=True,
-                                 alignment=ft.alignment.center),
-                ],
-                spacing=8,
-                tight=True,
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-        )
-        self.lyric_panel = ft.GestureDetector(
-            left=24,
-            top=400,
-            drag_interval=4,
-            mouse_cursor=ft.MouseCursor.MOVE,
-            on_pan_start=self._on_lyric_pan_start,
-            on_pan_update=self._on_lyric_pan_update,
-            on_pan_end=self._on_lyric_pan_end,
-            on_scale_start=self._on_lyric_pan_start,
-            on_scale_update=self._on_lyric_scale_update,
-            on_scale_end=self._on_lyric_pan_end,
-            content=self.lyric_box,
-            visible=self.show_lyric,
-        )
-        page.overlay.append(self.lyric_panel)
 
         # 启动时异步读取上次保存的音量/静音设置
         self._load_prefs()
@@ -581,49 +563,47 @@ class MusicApp:
         return "normal"
 
     def _apply_layout_mode(self):
-        """按设备模式套用 padding/字号/按钮高度，并重建列表行。
+        """按设备模式套用尺寸/字号，并切换主区「左右双栏 / 上下堆叠」。
+        注意：模式不变时也要重排——窗口宽度跨 760 阈值、高度变化都会影响歌词栏。
         桌面档（normal/desktop_small）不使用大字号；列表行重建仅发生在
         移动端 car 档进出的场合（行高/字号变化才需要重建）。"""
         page = self.page
         mode = self._detect_mode()
-        if mode == self._mode:
-            return
         prev = self._mode
         self._mode = mode
 
-        # 页面/播放条内边距
-        page.padding = {"car": 16, "compact": 8, "extreme": 8,
+        # 页面/播放条内边距（整体缩小一档）
+        page.padding = {"car": 14, "compact": 8, "extreme": 6,
                         "desktop_small": 8}.get(mode, 12)
         if self.player_bar is not None:
-            self.player_bar.padding = {"car": 12, "compact": 8, "extreme": 6,
-                                       "desktop_small": 8}.get(mode, 10)
+            self.player_bar.padding = ft.padding.symmetric(
+                horizontal={"car": 12, "extreme": 8}.get(mode, 10),
+                vertical={"car": 10, "extreme": 6}.get(mode, 8))
 
-        # 按钮热区：车机 52，其余 46（小屏省纵向空间，热区仍足够）
+        # 按钮高度：车机 48，其余 40（一屏多留几行）
         for b in self._buttons:
-            b.height = 52 if mode == "car" else 46
+            b.height = 48 if mode == "car" else 40
 
         # 字号：只有移动端 car 档加大（桌面任何窗口尺寸都不动字号）
         car = mode == "car"
-        self.title_text.size = 20 if car else 16
-        self.artist_text.size = 15 if car else 12
-        self.time_text.size = 15 if car else 12
-        self.time_text.width = 122 if car else 104
-        self.mute_btn.icon_size = 30 if car else 24
+        self.title_text.size = 18 if car else 15
+        self.artist_text.size = 13 if car else 11
+        self.time_text.size = 13 if car else 11
+        self.time_text.width = 116 if car else 98
+        self.mute_btn.icon_size = 28 if car else 22
         self.keyword.text_size = 16 if car else 14
-        self.platform_dd.width = 110 if car else 96
+        self.platform_dd.width = 104 if car else 92
         self.platform_dd.text_size = 16 if car else 14
-        self.search_btn.width = 88 if car else 72
+        self.search_btn.width = 84 if car else 68
+        self.lyric_title.size = 14 if car else 12
 
         # 次要元素：极端矮屏与桌面小窗隐藏，保列表高度
         hide_extras = mode in ("extreme", "desktop_small")
         self.vol_label.visible = not hide_extras
         self.status_text.visible = not hide_extras
 
-        # 歌词面板随模式调整尺寸并重置到播放条上方
-        try:
-            self._position_lyric_panel(reset=True)
-        except Exception:
-            pass
+        # 主区排版：宽屏左右双栏，窄屏上下堆叠
+        self._apply_main_layout()
 
         try:
             page.update()
@@ -638,6 +618,53 @@ class MusicApp:
                     self._rebuild_list()
             except Exception:
                 pass
+
+    def _apply_main_layout(self):
+        """主区排版（幂等，可在 resize 时反复调用）：
+        - 宽 >= 760：左右双栏（列表自适应，歌词栏 ≈ 可用宽度的 40%，180~560）
+        - 宽 < 760：上下堆叠（列表上、歌词下）；歌词栏占高度 35%，
+          extreme 矮屏占 30%，高度最小 120、最大 320
+        只有堆叠方向变化时才重建容器，避免每帧重建列表。"""
+        page = self.page
+        w = int(page.width or 0)
+        h = int(page.height or 0)
+        if w <= 0 or h <= 0 or self.main_area is None:
+            return
+        stacked = w < 760
+        if stacked:
+            ratio = 0.30 if self._mode == "extreme" else 0.35
+            ph = max(120, min(int(h * ratio), 320))
+            self.lyric_card.width = None
+            self.lyric_card.height = ph
+        else:
+            lw = max(180, min(int(w * 0.40), 560))
+            self.lyric_card.width = lw
+            self.lyric_card.height = None
+        if self._stacked != stacked:
+            self._rebuild_main_area(stacked)
+            self._stacked = stacked
+
+    def _rebuild_main_area(self, stacked):
+        """把列表与歌词栏重新挂到 Row/Column（先解绑旧父容器，避免重复挂载）"""
+        old = self.main_area.content
+        self.main_area.content = None
+        if old is not None:
+            try:
+                old.controls = []
+            except Exception:
+                pass
+        if stacked:
+            self.main_area.content = ft.Column(
+                [self.list_view, self.lyric_card],
+                spacing=10, expand=True,
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+            )
+        else:
+            self.main_area.content = ft.Row(
+                [self.list_view, self.lyric_card],
+                spacing=14, expand=True,
+                vertical_alignment=ft.CrossAxisAlignment.STRETCH,
+            )
 
     # ------------------------------------------------------------------
     # 音量控制（应用内增益，持久化优先 client_storage，手机/车机可用）
@@ -674,7 +701,8 @@ class MusicApp:
     def on_lyric_toggle(self, e):
         """勾选/取消歌词面板；状态持久化"""
         self.show_lyric = bool(self.lyric_check.value)
-        self.lyric_panel.visible = self.show_lyric
+        self.lyric_card.visible = self.show_lyric
+        self._apply_main_layout()   # 隐藏歌词栏时列表自动占满宽度
         if self.show_lyric and self.current_song is not None:
             platform = self.platform_dd.value or "kuwo"
             key = (platform, self.current_song.get("id"))
@@ -833,79 +861,6 @@ class MusicApp:
             self._lyric_active = idx
             self._render_lyric_window()
 
-    # ---- 歌词面板拖动（整块面板为热区）----
-    def _on_lyric_pan_start(self, e):
-        self._lyric_drag["on"] = True
-        self._lyric_drag["dx"] = self.lyric_panel.left or 0
-        self._lyric_drag["dy"] = self.lyric_panel.top or 0
-        print(f"[drag] start at ({self._lyric_drag['dx']}, {self._lyric_drag['dy']})"
-              f" event={type(e).__name__}")
-
-    def _on_lyric_pan_update(self, e):
-        ddx = getattr(e, "delta_x", 0) or 0
-        ddy = getattr(e, "delta_y", 0) or 0
-        self._lyric_drag_apply(ddx, ddy, "pan")
-
-    def _on_lyric_scale_update(self, e):
-        # ScaleUpdateEvent：鼠标拖拽走这里（pan 不认鼠标），取焦点位移
-        ddx = getattr(e, "focal_point_delta_x", 0) or 0
-        ddy = getattr(e, "focal_point_delta_y", 0) or 0
-        self._lyric_drag_apply(ddx, ddy, "scale")
-
-    def _lyric_drag_apply(self, ddx, ddy, src):
-        """统一应用拖拽位移：累计 delta（不是起点+单次 delta，否则会弹回原位）；
-        钳制边界每次读取实时窗口尺寸"""
-        if not self._lyric_drag.get("on"):
-            # 容错：个别平台 start 回调没触发但 update 已在派发 → 用当前坐标起步
-            self._lyric_drag["on"] = True
-            self._lyric_drag["dx"] = self.lyric_panel.left or 0
-            self._lyric_drag["dy"] = self.lyric_panel.top or 0
-            print(f"[drag] implicit start via {src}")
-        dbg_key = f"n_{src}"
-        self._lyric_drag[dbg_key] = self._lyric_drag.get(dbg_key, 0) + 1
-        if self._lyric_drag[dbg_key] <= 3:
-            print(f"[drag] {src} delta=({ddx}, {ddy})")
-        page = self.page
-        w = page.width or 0
-        h = page.height or 0
-        pw = self.lyric_box.width or 0
-        ph = self.lyric_box.height or 0
-        # 累计到位移状态里并同步钳制，再落到面板
-        self._lyric_drag["dx"] = max(0, min((self._lyric_drag["dx"] or 0) + ddx,
-                                            max(0, w - pw)))
-        self._lyric_drag["dy"] = max(0, min((self._lyric_drag["dy"] or 0) + ddy,
-                                            max(0, h - ph)))
-        self.lyric_panel.left = self._lyric_drag["dx"]
-        self.lyric_panel.top = self._lyric_drag["dy"]
-        try:
-            page.update()
-        except Exception:
-            pass
-
-    def _on_lyric_pan_end(self, e):
-        self._lyric_drag["on"] = False
-
-    def _position_lyric_panel(self, reset=True):
-        """按当前窗口/模式设置面板尺寸；reset=True 时置于播放条上方居中"""
-        page = self.page
-        w = page.width or 0
-        h = page.height or 0
-        if w <= 0 or h <= 0 or self.lyric_panel is None:
-            return
-        car = self._mode == "car"
-        tight = self._mode in ("extreme", "desktop_small")
-        pw = max(240, min(int(w * 0.72), 560))
-        ph = 210 if car else (142 if tight else 176)
-        self.lyric_box.width = pw
-        self.lyric_box.height = ph
-        if reset:
-            self.lyric_panel.left = max(8, (w - pw) // 2)
-            # 默认在播放条上方，不挡列表主体；矮屏再上移让位
-            self.lyric_panel.top = max(8, h - ph - (160 if not tight else 128))
-        else:
-            self.lyric_panel.left = max(0, min(self.lyric_panel.left or 0, w - pw))
-            self.lyric_panel.top = max(0, min(self.lyric_panel.top or 0, h - ph))
-
     def _apply_volume_to_audio(self):
         """把当前音量同步给 Audio 组件（懒创建/切歌后都要调用）"""
         if self.audio is not None:
@@ -952,7 +907,7 @@ class MusicApp:
                 self.vol_slider.value = 0 if self.muted else self.volume
                 self._set_mute_visual()
                 self.lyric_check.value = self.show_lyric
-                self.lyric_panel.visible = self.show_lyric
+                self.lyric_card.visible = self.show_lyric
                 self._apply_volume_to_audio()
                 self.page.update()
             except Exception:
@@ -1161,56 +1116,45 @@ class MusicApp:
 
     def _append_rows(self, items, base_index):
         """把一批歌曲追加到列表。base_index 为这批歌曲在 songs 中的起始索引。
-        行结构：强调条 | 序号 | 歌名/歌手·专辑 | 音质，四列固定栅格对齐"""
+        窄栏紧凑版：强调条 | 序号 | 歌名（单行）| 时长，行高固定 44（车机 50），
+        专辑/歌手在窄宽度下隐藏，避免文字挤压"""
         new_rows = []
         new_bars = []
-        # 车机模式：大字号、大行高，远距观看可读
         car = self._mode == "car"
-        t_size = 17 if car else 14
-        s_size = 13 if car else 12
-        q_size = 13 if car else 12
-        pad_v = 9 if car else 7
-        bar_h = 40 if car else 34
+        t_size = 16 if car else 14
+        s_size = 13 if car else 11
+        row_h = 50 if car else 44
+        bar_h = 26 if car else 22
         for i, song in enumerate(items):
             idx = base_index + i
-            q = pick_best_quality(song.get("minfo") or [])
-            quality = f"{q['format'].upper()} {q.get('bitrate')}K" if q else "无MP3"
             name = song.get("name", "?")
-            artist = song.get("artist", "") or "未知歌手"
-            album = song.get("album_name", "") or ""
-            meta = f"{artist} · {album}" if album else artist
+            dur_ms = self._guess_duration_ms(song.get("duration"))
+            dur_txt = fmt_time(dur_ms / 1000) if dur_ms else "--:--"
             bar = ft.Container(
                 width=3, height=bar_h, border_radius=2,
                 bgcolor=ft.Colors.TRANSPARENT)
             num = ft.Text(
                 f"{idx + 1}", size=s_size, color=C_TEXT_3,
-                width=26, text_align=ft.TextAlign.RIGHT)
+                width=24, text_align=ft.TextAlign.RIGHT)
             row = ft.Container(
                 content=ft.Row(
                     [
                         bar,
                         num,
-                        ft.Column(
-                            [
-                                ft.Text(
-                                    name, size=t_size, color=C_TEXT,
-                                    weight=ft.FontWeight.W_500,
-                                    max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                                ft.Text(
-                                    meta, size=s_size, color=C_TEXT_2,
-                                    max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                            ],
-                            spacing=2, tight=True, expand=True,
-                        ),
                         ft.Text(
-                            quality, size=q_size, color=C_TEXT_3,
-                            width=84, text_align=ft.TextAlign.RIGHT),
+                            name, size=t_size, color=C_TEXT,
+                            weight=ft.FontWeight.W_500, expand=True,
+                            max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                        ft.Text(
+                            dur_txt, size=s_size, color=C_TEXT_3, width=40,
+                            text_align=ft.TextAlign.RIGHT),
                     ],
                     spacing=8,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                padding=ft.padding.symmetric(horizontal=8, vertical=pad_v),
-                border_radius=8,
+                height=row_h,
+                padding=ft.padding.symmetric(horizontal=8),
+                border_radius=6,
                 bgcolor=C_SURFACE,   # 白色行底，靠 ListView 分隔线分界
                 on_click=lambda e, k=idx: self.on_row_click(k),
                 ink=True,
@@ -1328,6 +1272,7 @@ class MusicApp:
         # 更新播放条（歌名主、歌手次，时间靠右独立显示）
         self.title_text.value = name
         self.artist_text.value = artist or "未知歌手"
+        self.lyric_title.value = f"歌词 · {name}"
         self._duration_ms = self._guess_duration_ms(song.get("duration"))
         self.slider.max = max(1, int(self._duration_ms / 1000)) if self._duration_ms else 100
         self.slider.value = 0
