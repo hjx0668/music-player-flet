@@ -15,6 +15,13 @@ dependencies = [
 [tool.flet]
 # Android 目标 SDK 等保持模板默认
 
+[tool.flet.android.manifest_application]
+# Android 15（targetSdk 35）默认强制 edge-to-edge：状态栏/手势条透明，
+# 内容会画到系统栏下面，表现为“状态栏消失、顶部被压住”。
+# 该属性写入模板 AndroidManifest 的 <application>，恢复普通窗口布局（状态栏可见）。
+# 注意：Android 16 起对 targetSdk 36 应用会失效，代码侧已用 SafeArea 兜底。
+windowOptOutEdgeToEdgeEnforcement = "true"
+
 [tool.flet.app]
 # 应用文件就在仓库根目录，入口为 main.py
 path = "."
