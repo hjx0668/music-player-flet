@@ -510,13 +510,31 @@ class MusicApp:
 
         # ===== 主区：宽屏左右双栏 / 窄屏上下堆叠（_apply_main_layout 切换）=====
         self.main_area = ft.Container(expand=True)
+
+        # 根布局包 SafeArea：
+        # - Android 15 起 targetSdk 35 强制 edge-to-edge，系统栏透明、内容会画到
+        #   状态栏/手势条下面；SafeArea 自动按 MediaQuery 的 insets 让位，避免被压住
+        # - 车机等无状态栏设备 insets 为 0，不会产生多余留白
+        # - 桌面 insets 为 0，布局与之前一致
+        self.root_col = ft.Column(
+            [
+                search_row,
+                actions_row,
+                secondary_row,
+                self.main_area,
+                player_bar,
+                self.status_text,
+            ],
+            spacing=12,
+            expand=True,
+        )
         page.add(
-            search_row,
-            actions_row,
-            secondary_row,
-            self.main_area,
-            player_bar,
-            self.status_text,
+            ft.SafeArea(
+                content=self.root_col,
+                expand=True,
+                left=True, top=True, right=True, bottom=True,
+                minimum_padding=0,
+            )
         )
 
         # 启动时异步读取上次保存的音量/静音设置
