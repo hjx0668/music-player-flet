@@ -56,6 +56,45 @@ PAGE_SIZE = 20          # 网站每页大小
 MAX_PAGES = 50          # 安全上限，防止无限翻页
 REQ_TIMEOUT = 30        # 请求超时（秒）
 
+# ======================================================================
+# 主题（浅色明亮风格）
+# 所有颜色/不透明度集中定义，界面代码里不再散落硬编码色值
+# ======================================================================
+C_BG = "#F7F9FC"            # 页面底色：极浅灰蓝
+C_SURFACE = "#FFFFFF"       # 卡片/播放条/列表行底色：白色
+C_SURFACE_ALT = "#F0F3F7"   # 次级表面：按钮、滑块轨道底
+C_ACCENT = "#1E88E5"        # 强调色（清爽蓝）
+C_TEXT = "#1F2430"          # 一级文字（主，深灰近黑）
+C_TEXT_2 = "#5A6472"        # 二级文字（次，中灰）
+C_TEXT_3 = "#9AA4B2"        # 三级文字（弱提示，浅灰）
+C_DIVIDER = "#E3E8EF"       # 分隔线 / 滑块非活动轨道
+# 歌词面板（白色 88% 半透明 + 深灰字，保证浅色主题下的对比度）
+C_LYRIC_BG = "#FFFFFF"
+C_LYRIC_BG_OPACITY = 0.88   # 面板不透明度 88%
+C_LYRIC_CUR = C_ACCENT      # 当前行：强调蓝加粗放大
+C_LYRIC_NEAR = "#1F2430"    # 相邻行：70% 深灰
+C_LYRIC_FAR = "#1F2430"     # 其余行：40% 深灰
+C_LYRIC_MSG = "#1F2430"     # 加载中/暂无歌词
+
+
+def _op(color, alpha):
+    """颜色 + 不透明度的简写（统一走 ft.Colors.with_opacity）"""
+    return ft.Colors.with_opacity(alpha, color)
+
+
+def _btn_style(primary=False):
+    """统一按钮样式：主按钮强调蓝底白字，次按钮浅灰底 + 强调色文字/图标"""
+    return ft.ButtonStyle(
+        color="#FFFFFF" if primary else C_ACCENT,
+        bgcolor=C_ACCENT if primary else C_SURFACE_ALT,
+        icon_color="#FFFFFF" if primary else C_ACCENT,
+        overlay_color=_op("#000000", 0.06),
+        elevation=0,
+        padding=ft.padding.symmetric(horizontal=12, vertical=10),
+        shape=ft.RoundedRectangleBorder(radius=10),
+        text_style=ft.TextStyle(size=14, weight=ft.FontWeight.W_500),
+    )
+
 
 def pick_best_quality(minfo):
     """从 minfo 列表中挑选最佳音质（极高320K -> 普通128K）。返回 dict 或 None"""
@@ -242,6 +281,9 @@ class MusicApp:
         self._pre_mute_volume = 80         # 静音前的音量，恢复用
         self._mode = None                  # 布局模式：car/compact/extreme/normal/desktop_small
         self.row_controls = []             # 与 songs 一一对应的列表行控件
+        self.row_bars = []                 # 与 row_controls 一一对应的"正在播放"左侧强调条
+        self._seek_target = 0              # 进度条拖动目标（秒）
+        self._seek_seq = 0                 # 进度条拖动序号：让过期的兜底 seek 失效
 
         # ---- 歌词状态 ----
         self.show_lyric = True             # 歌词开关（默认勾选，持久化）
@@ -252,7 +294,11 @@ class MusicApp:
 
         page.title = "音乐播放器 - flac.music.hi.cn"
         page.vertical_alignment = ft.MainAxisAlignment.START
+        # 统一浅色主题：底色、表面、文字三级色全部走主题常量
+        page.theme_mode = ft.ThemeMode.LIGHT
+        page.bgcolor = C_BG
         page.padding = 12
+        page.spacing = 8
         page.on_resize = self._on_page_resize
 
         self._build_ui()
@@ -269,128 +315,164 @@ class MusicApp:
         # 播放结束需在 on_state_changed 中检测 completed 状态
         self.audio = None
 
-        # ===== 搜索区 =====
+        # ===== 搜索区（下拉 96 + 输入框自适应 + 搜索按钮固定宽，栅格整齐）=====
         self.platform_dd = ft.Dropdown(
-            width=120,
+            width=96,
             value="kuwo",  # 默认酷我：酷我取播放地址可用；wyy 的解析后端在网站端故障
             options=[
                 ft.dropdown.Option("kuwo", "酷我"),
                 ft.dropdown.Option("wyy", "网易云"),
             ],
+            text_size=14,
+            bgcolor=C_SURFACE,
+            border_color=C_DIVIDER,
+            focused_border_color=C_ACCENT,
+            color=C_TEXT,
+            border_radius=10,
         )
         self.keyword = ft.TextField(
             hint_text="歌手 / 歌曲名",
             expand=True,
             on_submit=self.do_search,
+            text_size=14,
+            bgcolor=C_SURFACE,
+            border_color=C_DIVIDER,
+            focused_border_color=C_ACCENT,
+            color=C_TEXT,
+            cursor_color=C_ACCENT,
+            hint_style=ft.TextStyle(color=C_TEXT_3, size=14),
+            content_padding=ft.padding.symmetric(horizontal=12, vertical=12),
+            border_radius=10,
         )
-        self.search_btn = ft.ElevatedButton("搜索", on_click=self.do_search)
-        self.load_all_btn = ft.ElevatedButton("加载全部", on_click= self.load_all_pages)
+        self.search_btn = ft.ElevatedButton(
+            "搜索", width=72, on_click=self.do_search, style=_btn_style(primary=True))
+        self.load_all_btn = ft.ElevatedButton(
+            "加载全部", on_click=self.load_all_pages, style=_btn_style())
 
         search_row = ft.Row(
             [self.platform_dd, self.keyword, self.search_btn],
             spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
-        # ===== 播放方式区 =====
-        self.pause_btn = ft.ElevatedButton(
-            "暂停", icon=ft.Icons.PAUSE, on_click=self.on_pause_toggle)
+        # ===== 播放控制区（同一行四个等距按钮；短标签保证小屏不换行）=====
         self.play_first_btn = ft.ElevatedButton(
-            "从头播放", icon=ft.Icons.PLAY_ARROW, on_click=self.on_play_from_first)
+            "播放", icon=ft.Icons.PLAY_ARROW, tooltip="从第一首开始顺序播放",
+            on_click=self.on_play_from_first, style=_btn_style())
         self.random_btn = ft.ElevatedButton(
-            "随机播放", icon=ft.Icons.SHUFFLE, on_click=self.on_play_random)
+            "随机", icon=ft.Icons.SHUFFLE, tooltip="随机播放",
+            on_click=self.on_play_random, style=_btn_style())
         self.stop_btn = ft.ElevatedButton(
-            "停止", icon=ft.Icons.STOP, on_click=self.on_stop)
-        # 统一收集按钮，便于按设备模式调整尺寸（热区≥48逻辑像素）
+            "停止", icon=ft.Icons.STOP, tooltip="停止播放",
+            on_click=self.on_stop, style=_btn_style())
+        self.pause_btn = ft.ElevatedButton(
+            "暂停", icon=ft.Icons.PAUSE, on_click=self.on_pause_toggle,
+            style=_btn_style())
+        # 统一收集按钮，便于按设备模式调整高度
         self._buttons = [self.search_btn, self.load_all_btn, self.pause_btn,
                          self.play_first_btn, self.random_btn, self.stop_btn]
         # 歌词开关（默认勾选，状态持久化见 _load_prefs/_persist_lyric_pref）
         self.lyric_check = ft.Checkbox(
-            label="歌词", value=True, on_change=self.on_lyric_toggle)
+            label="歌词", value=True, on_change=self.on_lyric_toggle,
+            label_style=ft.TextStyle(color=C_TEXT, size=14),
+            active_color=C_ACCENT,
+            check_color="#FFFFFF",
+            shape=ft.RoundedRectangleBorder(radius=4),
+            visual_density=ft.VisualDensity.COMPACT,
+        )
         actions_row = ft.Row(
-            [self.play_first_btn, self.random_btn, self.stop_btn,
-             self.pause_btn, self.load_all_btn, self.lyric_check],
+            [self.play_first_btn, self.random_btn, self.stop_btn, self.pause_btn],
             spacing=8,
-            wrap=True,
+        )
+        # 次行：加载全部（左）+ 歌词开关（右），用弹性占位让两端对齐
+        secondary_row = ft.Row(
+            [self.load_all_btn, ft.Container(expand=True), self.lyric_check],
+            spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
         # ===== 歌曲列表 =====
         self.list_view = ft.ListView(
             expand=True,
-            spacing=2,
-            padding=4,
+            spacing=0,
+            padding=ft.padding.symmetric(horizontal=2, vertical=4),
             auto_scroll=False,
+            divider_thickness=1,   # 行间细分隔线（浅灰）
         )
 
-        # ===== 底部播放条 =====
+        # ===== 底部播放条（标题/歌手两级 + 等宽时间靠右）=====
         self.title_text = ft.Text(
-            "未播放",
-            size=16,
-            weight=ft.FontWeight.BOLD,
-            max_lines=1,
-            overflow=ft.TextOverflow.ELLIPSIS,
-            expand=True,  # 长歌名省略号截断，不把时间/按钮挤出屏
+            "未播放", size=16, weight=ft.FontWeight.BOLD, color=C_TEXT,
+            max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
+            expand=True,  # 长歌名省略号截断，不把时间挤出屏
+        )
+        self.artist_text = ft.Text(
+            "选择歌曲后开始播放", size=12, color=C_TEXT_2,
+            max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, expand=True,
+        )
+        self.time_text = ft.Text(
+            "00:00 / 00:00", size=12, color=C_TEXT_2, width=104,
+            text_align=ft.TextAlign.RIGHT, font_family="monospace",
         )
         self.slider = ft.Slider(
-            min=0,
-            max=100,
-            value=0,
-            expand=True,
+            min=0, max=100, value=0, expand=True,
+            active_color=C_ACCENT, inactive_color=C_DIVIDER, thumb_color=C_ACCENT,
+            overlay_color=_op(C_ACCENT, 0.15),
+            on_change=self._on_slider_change,
             on_change_start=self._on_slider_start,
             on_change_end=self._on_slider_end,
         )
-        self.time_text = ft.Text("00:00 / 00:00", size=12)
 
         # ---- 音量区（应用内增益；系统音量键不受影响）----
-        # Material 矢量图标，颜色随主题；触屏点击区 48x48
         self.mute_btn = ft.IconButton(
             icon=ft.Icons.VOLUME_UP,
-            icon_size=26,
+            icon_size=24,
+            icon_color=C_TEXT_2,
             tooltip="静音 / 恢复",
             on_click=self.on_mute_toggle,
         )
         self.vol_slider = ft.Slider(
-            min=0,
-            max=100,
-            value=self.volume,
-            expand=True,
-            label="{value}%",
+            min=0, max=100, value=self.volume, expand=True, label="{value}%",
+            active_color=C_ACCENT, inactive_color=C_DIVIDER, thumb_color=C_ACCENT,
+            overlay_color=_op(C_ACCENT, 0.15),
             on_change=self.on_volume_change,
             on_change_end=self.on_volume_commit,
         )
         # 触屏友好：加大上下留白扩大点击/拖动区域
         self.vol_area = ft.Container(
             content=self.vol_slider,
-            padding=ft.padding.symmetric(vertical=8),
+            padding=ft.padding.symmetric(vertical=6),
             expand=True,
         )
-        vol_label = self.vol_label = ft.Text(
-            "应用音量", size=11, color=ft.Colors.GREY_600,
-            tooltip="这是本播放器内的音量；手机/车机的系统音量键不受影响")
+        self.vol_label = ft.Text(
+            f"{self.volume}%", size=11, color=C_TEXT_3,
+            tooltip="应用内音量（不影响手机/车机系统音量键）")
 
-        _surface = getattr(ft.Colors, "SURFACE_CONTAINER_HIGHEST", None) \
-            or getattr(ft.Colors, "SURFACE_VARIANT", None) \
-            or ft.Colors.BLUE_GREY_100
-        # 统一紧凑布局（宽矮屏同样适用）：
-        # 行1 标题+时间 / 行2 进度条 / 行3 静音+音量滑块+标签
-        # 矮屏(compact)由 _apply_layout_mode 收紧内边距并隐藏次要元素
+        # 行1 标题+歌手 / 行2 进度条 / 行3 静音+音量滑块+百分比
         player_bar = ft.Container(
             content=ft.Column(
                 [
-                    ft.Row([self.title_text, self.time_text],
-                           spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Row(
+                        [ft.Column([self.title_text, self.artist_text],
+                                   spacing=1, tight=True, expand=True),
+                         self.time_text],
+                        spacing=10,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
                     self.slider,
                     ft.Row(
                         [self.mute_btn, self.vol_area, self.vol_label],
-                        spacing=8,
+                        spacing=4,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                 ],
                 spacing=2,
                 tight=True,
             ),
-            padding=10,
-            bgcolor=_surface,
-            border_radius=8,
+            padding=ft.padding.symmetric(horizontal=12, vertical=10),
+            bgcolor=C_SURFACE,
+            border_radius=14,
+            border=ft.border.all(1, C_DIVIDER),
         )
         self.player_bar = player_bar
 
@@ -398,65 +480,60 @@ class MusicApp:
         self.status_text = ft.Text(
             "就绪。输入歌手名或歌曲名后点击搜索。",
             size=12,
-            color=ft.Colors.GREY_700,
+            color=C_TEXT_2,
         )
 
         page.add(
             search_row,
             actions_row,
+            secondary_row,
             self.list_view,
             player_bar,
             self.status_text,
         )
 
-        # ===== 歌词遮罩面板（半透明、可拖动、默认不挡列表主体）=====
-        # 层级说明：面板放在 page.overlay，歌词主体包 IgnorePointer(ignore=True)
-        # 不吃掉下层点击；只有顶部把手区响应拖拽手势。
+        # ===== 歌词面板（深色半透明；整块面板都是拖动热区）=====
+        # 结构：GestureDetector(负责 left/top 定位与手势) → Container(视觉层)
+        # 触摸面板任意位置都能拖动，不再只有顶部把手能拖（Android 触屏根因）
         self._lyric_drag = {"on": False, "dx": 0, "dy": 0}
-        self.lyric_col = ft.Column(spacing=2, tight=True)
-        self.lyric_panel = ft.Container(
-            width=420,
-            height=170,
-            left=40,
-            top=400,
-            border_radius=10,
-            padding=6,
-            bgcolor=ft.Colors.with_opacity(0.32, ft.Colors.BLUE_GREY_900),
-            visible=self.show_lyric,
+        self.lyric_col = ft.Column(
+            spacing=4, tight=True,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+        self.lyric_box = ft.Container(
+            width=400,
+            height=172,
+            border_radius=14,
+            padding=ft.padding.symmetric(horizontal=16, vertical=12),
+            bgcolor=_op(C_LYRIC_BG, C_LYRIC_BG_OPACITY),
+            border=ft.border.all(1, _op(C_TEXT, 0.10)),
+            shadow=ft.BoxShadow(blur_radius=16, color=_op(C_TEXT, 0.18),
+                                offset=ft.Offset(0, 6)),
             content=ft.Column(
                 [
-                    # 顶部拖拽把手：40px 高、占满面板全宽；桌面鼠标与触屏都可拖
-                    # （on_pan_* 只认触屏，on_scale_* 同时认鼠标+触屏，双绑保证两端可用）
-                    ft.GestureDetector(
-                        drag_interval=10,
-                        on_pan_start=self._on_lyric_pan_start,
-                        on_pan_update=self._on_lyric_pan_update,
-                        on_pan_end=self._on_lyric_pan_end,
-                        on_scale_start=self._on_lyric_pan_start,
-                        on_scale_update=self._on_lyric_scale_update,
-                        on_scale_end=self._on_lyric_pan_end,
-                        mouse_cursor=ft.MouseCursor.MOVE,
-                        content=ft.Container(
-                            height=40,
-                            alignment=ft.alignment.center,
-                            content=ft.Container(
-                                width=56, height=5, border_radius=3,
-                                bgcolor=ft.Colors.with_opacity(
-                                    0.75, ft.Colors.BLUE_GREY_700),
-                            ),
-                        ),
-                    ),
-                    # 歌词主体：TransparentPointer 使列表/按钮点击可穿透面板区域
-                    # （flet 0.28 无 IgnorePointer，等效控件为 TransparentPointer）
-                    ft.TransparentPointer(
-                        content=ft.Container(
-                            content=self.lyric_col, expand=True,
-                            alignment=ft.alignment.center),
-                    ),
+                    # 顶部小横条：视觉提示"可拖动"
+                    ft.Container(width=44, height=4, border_radius=2,
+                                 bgcolor=_op(C_TEXT, 0.22)),
+                    ft.Container(content=self.lyric_col, expand=True,
+                                 alignment=ft.alignment.center),
                 ],
-                spacing=0,
+                spacing=8,
                 tight=True,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
+        )
+        self.lyric_panel = ft.GestureDetector(
+            left=24,
+            top=400,
+            drag_interval=4,
+            mouse_cursor=ft.MouseCursor.MOVE,
+            on_pan_start=self._on_lyric_pan_start,
+            on_pan_update=self._on_lyric_pan_update,
+            on_pan_end=self._on_lyric_pan_end,
+            on_scale_start=self._on_lyric_pan_start,
+            on_scale_update=self._on_lyric_scale_update,
+            on_scale_end=self._on_lyric_pan_end,
+            content=self.lyric_box,
+            visible=self.show_lyric,
         )
         page.overlay.append(self.lyric_panel)
 
@@ -521,17 +598,21 @@ class MusicApp:
             self.player_bar.padding = {"car": 12, "compact": 8, "extreme": 6,
                                        "desktop_small": 8}.get(mode, 10)
 
-        # 按钮热区：车机 52，其余统一 48 逻辑像素
+        # 按钮热区：车机 52，其余 46（小屏省纵向空间，热区仍足够）
         for b in self._buttons:
-            b.height = 52 if mode == "car" else 48
+            b.height = 52 if mode == "car" else 46
 
         # 字号：只有移动端 car 档加大（桌面任何窗口尺寸都不动字号）
         car = mode == "car"
         self.title_text.size = 20 if car else 16
+        self.artist_text.size = 15 if car else 12
         self.time_text.size = 15 if car else 12
-        self.mute_btn.icon_size = 30 if car else 26
+        self.time_text.width = 122 if car else 104
+        self.mute_btn.icon_size = 30 if car else 24
         self.keyword.text_size = 16 if car else 14
-        self.platform_dd.width = 96 if car else 120  # 车机屏宽裕，统一 120
+        self.platform_dd.width = 110 if car else 96
+        self.platform_dd.text_size = 16 if car else 14
+        self.search_btn.width = 88 if car else 72
 
         # 次要元素：极端矮屏与桌面小窗隐藏，保列表高度
         hide_extras = mode in ("extreme", "desktop_small")
@@ -571,9 +652,19 @@ class MusicApp:
         self.pause_btn.icon = ft.Icons.PLAY_ARROW if paused else ft.Icons.PAUSE
 
     def _set_mute_visual(self):
-        """静音按钮：VOLUME_UP/VOLUME_OFF 切换，静音态用灰色弱化"""
-        self.mute_btn.icon = ft.Icons.VOLUME_OFF if self.muted else ft.Icons.VOLUME_UP
-        self.mute_btn.icon_color = ft.Colors.GREY if self.muted else None
+        """ muted / 0% → VOLUME_OFF，<50% → VOLUME_DOWN，其余 → VOLUME_UP"""
+        if self.muted or self.volume <= 0:
+            icon = ft.Icons.VOLUME_OFF
+        elif self.volume < 50:
+            icon = ft.Icons.VOLUME_DOWN
+        else:
+            icon = ft.Icons.VOLUME_UP
+        self.mute_btn.icon = icon
+        self.mute_btn.icon_color = C_TEXT_3 if self.muted else C_TEXT_2
+        try:
+            self.vol_label.value = f"{0 if self.muted else self.volume}%"
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # 歌词显示（半透明面板，跟随播放进度高亮）
@@ -660,7 +751,7 @@ class MusicApp:
 
     def _lyric_font_size(self):
         """歌词字号随设备分档：车机大字号"""
-        return 17 if self._mode == "car" else 14
+        return 18 if self._mode == "car" else 15
 
     def _render_lyric_message(self, msg):
         """面板占位提示（加载中/暂无歌词）；空串则清空待高亮"""
@@ -668,7 +759,7 @@ class MusicApp:
         if msg:
             self.lyric_col.controls = [ft.Text(
                 msg, size=size,
-                color=ft.Colors.with_opacity(0.75, ft.Colors.BLUE_GREY_900),
+                color=_op(C_LYRIC_MSG, 0.75),
                 text_align=ft.TextAlign.CENTER)]
         else:
             self.lyric_col.controls = []
@@ -679,8 +770,8 @@ class MusicApp:
 
     def _render_lyric_window(self):
         """渲染以当前行为中心的歌词窗口（上4行+当前+下4行）。
-        配色：当前行亮蓝加粗放大，相邻行中性灰 #455A64，远行渐隐；
-        面板 32% 浅底，各档位下深灰字对比充足"""
+        浅色面板 + 深灰字体系：当前行强调蓝加粗放大，相邻行 70% 深灰，其余 40% 深灰。
+        每次当前行索引变化都会整块重建 Text 样式（不是只改文字内容）"""
         if not self._lyric_lines:
             return
         act = self._lyric_active
@@ -693,17 +784,21 @@ class MusicApp:
             _, txt = self._lyric_lines[i]
             if i == act:
                 controls.append(ft.Text(
-                    txt, size=size + 2, weight=ft.FontWeight.BOLD,
-                    color="#2979FF", text_align=ft.TextAlign.CENTER))
+                    txt, size=size + 3, weight=ft.FontWeight.BOLD,
+                    color=C_LYRIC_CUR, text_align=ft.TextAlign.CENTER,
+                    max_lines=2, overflow=ft.TextOverflow.ELLIPSIS))
             elif abs(i - act) == 1:
                 controls.append(ft.Text(
                     txt, size=size,
-                    color="#455A64", text_align=ft.TextAlign.CENTER))
+                    color=_op(C_LYRIC_NEAR, 0.70),
+                    text_align=ft.TextAlign.CENTER,
+                    max_lines=1, overflow=ft.TextOverflow.ELLIPSIS))
             else:
                 controls.append(ft.Text(
                     txt, size=size,
-                    color=ft.Colors.with_opacity(0.45, "#455A64"),
-                    text_align=ft.TextAlign.CENTER))
+                    color=_op(C_LYRIC_FAR, 0.40),
+                    text_align=ft.TextAlign.CENTER,
+                    max_lines=1, overflow=ft.TextOverflow.ELLIPSIS))
         self.lyric_col.controls = controls
         try:
             self.page.update()
@@ -733,14 +828,18 @@ class MusicApp:
                 else:
                     break
         if idx != self._lyric_active:
+            # 索引变化 → 整块重建歌词样式（颜色/字重/字号都随之更新）
+            print(f"[lyric] active line {self._lyric_active} -> {idx} @ {pos_sec:.1f}s")
             self._lyric_active = idx
             self._render_lyric_window()
 
-    # ---- 歌词面板拖动 ----
+    # ---- 歌词面板拖动（整块面板为热区）----
     def _on_lyric_pan_start(self, e):
         self._lyric_drag["on"] = True
         self._lyric_drag["dx"] = self.lyric_panel.left or 0
         self._lyric_drag["dy"] = self.lyric_panel.top or 0
+        print(f"[drag] start at ({self._lyric_drag['dx']}, {self._lyric_drag['dy']})"
+              f" event={type(e).__name__}")
 
     def _on_lyric_pan_update(self, e):
         ddx = getattr(e, "delta_x", 0) or 0
@@ -757,7 +856,11 @@ class MusicApp:
         """统一应用拖拽位移：累计 delta（不是起点+单次 delta，否则会弹回原位）；
         钳制边界每次读取实时窗口尺寸"""
         if not self._lyric_drag.get("on"):
-            return
+            # 容错：个别平台 start 回调没触发但 update 已在派发 → 用当前坐标起步
+            self._lyric_drag["on"] = True
+            self._lyric_drag["dx"] = self.lyric_panel.left or 0
+            self._lyric_drag["dy"] = self.lyric_panel.top or 0
+            print(f"[drag] implicit start via {src}")
         dbg_key = f"n_{src}"
         self._lyric_drag[dbg_key] = self._lyric_drag.get(dbg_key, 0) + 1
         if self._lyric_drag[dbg_key] <= 3:
@@ -765,8 +868,8 @@ class MusicApp:
         page = self.page
         w = page.width or 0
         h = page.height or 0
-        pw = self.lyric_panel.width or 0
-        ph = self.lyric_panel.height or 0
+        pw = self.lyric_box.width or 0
+        ph = self.lyric_box.height or 0
         # 累计到位移状态里并同步钳制，再落到面板
         self._lyric_drag["dx"] = max(0, min((self._lyric_drag["dx"] or 0) + ddx,
                                             max(0, w - pw)))
@@ -791,14 +894,14 @@ class MusicApp:
             return
         car = self._mode == "car"
         tight = self._mode in ("extreme", "desktop_small")
-        pw = max(240, min(int(w * 0.7), 560))
-        ph = 200 if car else (130 if tight else 160)
-        self.lyric_panel.width = pw
-        self.lyric_panel.height = ph
+        pw = max(240, min(int(w * 0.72), 560))
+        ph = 210 if car else (142 if tight else 176)
+        self.lyric_box.width = pw
+        self.lyric_box.height = ph
         if reset:
             self.lyric_panel.left = max(8, (w - pw) // 2)
             # 默认在播放条上方，不挡列表主体；矮屏再上移让位
-            self.lyric_panel.top = max(8, h - ph - (150 if not tight else 120))
+            self.lyric_panel.top = max(8, h - ph - (160 if not tight else 128))
         else:
             self.lyric_panel.left = max(0, min(self.lyric_panel.left or 0, w - pw))
             self.lyric_panel.top = max(0, min(self.lyric_panel.top or 0, h - ph))
@@ -872,6 +975,8 @@ class MusicApp:
             self._set_mute_visual()
         elif not self.muted:
             self._pre_mute_volume = self.volume
+        # 图标随音量档位变化（OFF/DOWN/UP）+ 右侧百分比同步
+        self._set_mute_visual()
         self._apply_volume_to_audio()
         try:
             self.page.update()
@@ -911,9 +1016,14 @@ class MusicApp:
             pass
 
     def _update_highlight(self):
-        """高亮当前播放行"""
-        for i, tile in enumerate(self.row_controls):
-            tile.bgcolor = ft.Colors.AMBER_100 if i == self.current_index else None
+        """高亮当前播放行：浅蓝底（强调色 10%）+ 左侧强调色竖条"""
+        for i, row in enumerate(self.row_controls):
+            active = i == self.current_index
+            # 正在播放：浅蓝底（强调色 10%）+ 左侧强调条
+            row.bgcolor = _op(C_ACCENT, 0.10) if active else C_SURFACE
+            if i < len(self.row_bars):
+                self.row_bars[i].bgcolor = (
+                    C_ACCENT if active else ft.Colors.TRANSPARENT)
         try:
             self.page.update()
         except Exception:
@@ -1032,6 +1142,7 @@ class MusicApp:
         with self.songs_lock:
             self.songs = []
         self.row_controls = []
+        self.row_bars = []
         self.current_index = None
         self.list_view.controls.clear()
         try:
@@ -1043,51 +1154,77 @@ class MusicApp:
         """搜索完成后重建整个列表"""
         self.list_view.controls.clear()
         self.row_controls = []
+        self.row_bars = []
         with self.songs_lock:
             items = list(self.songs)
         self._append_rows(items, 0)
 
     def _append_rows(self, items, base_index):
-        """把一批歌曲追加到列表。base_index 为这批歌曲在 songs 中的起始索引"""
-        new_tiles = []
-        # 车机模式：大字号、大行高（dense=False），远距观看可读
+        """把一批歌曲追加到列表。base_index 为这批歌曲在 songs 中的起始索引。
+        行结构：强调条 | 序号 | 歌名/歌手·专辑 | 音质，四列固定栅格对齐"""
+        new_rows = []
+        new_bars = []
+        # 车机模式：大字号、大行高，远距观看可读
         car = self._mode == "car"
         t_size = 17 if car else 14
         s_size = 13 if car else 12
-        l_size = 15 if car else 13
-        dense = not car
+        q_size = 13 if car else 12
+        pad_v = 9 if car else 7
+        bar_h = 40 if car else 34
         for i, song in enumerate(items):
             idx = base_index + i
             q = pick_best_quality(song.get("minfo") or [])
             quality = f"{q['format'].upper()} {q.get('bitrate')}K" if q else "无MP3"
-            tile = ft.ListTile(
-                leading=ft.Text(str(idx + 1), size=l_size),
-                title=ft.Text(
-                    f"{song.get('name', '?')} - {song.get('artist', '')}",
-                    max_lines=1,
-                    overflow=ft.TextOverflow.ELLIPSIS,
-                    size=t_size,
+            name = song.get("name", "?")
+            artist = song.get("artist", "") or "未知歌手"
+            album = song.get("album_name", "") or ""
+            meta = f"{artist} · {album}" if album else artist
+            bar = ft.Container(
+                width=3, height=bar_h, border_radius=2,
+                bgcolor=ft.Colors.TRANSPARENT)
+            num = ft.Text(
+                f"{idx + 1}", size=s_size, color=C_TEXT_3,
+                width=26, text_align=ft.TextAlign.RIGHT)
+            row = ft.Container(
+                content=ft.Row(
+                    [
+                        bar,
+                        num,
+                        ft.Column(
+                            [
+                                ft.Text(
+                                    name, size=t_size, color=C_TEXT,
+                                    weight=ft.FontWeight.W_500,
+                                    max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                                ft.Text(
+                                    meta, size=s_size, color=C_TEXT_2,
+                                    max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                            ],
+                            spacing=2, tight=True, expand=True,
+                        ),
+                        ft.Text(
+                            quality, size=q_size, color=C_TEXT_3,
+                            width=84, text_align=ft.TextAlign.RIGHT),
+                    ],
+                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                subtitle=ft.Text(
-                    song.get("album_name", "") or "",
-                    max_lines=1,
-                    overflow=ft.TextOverflow.ELLIPSIS,
-                    size=s_size,
-                ),
-                trailing=ft.Text(quality, size=s_size),
+                padding=ft.padding.symmetric(horizontal=8, vertical=pad_v),
+                border_radius=8,
+                bgcolor=C_SURFACE,   # 白色行底，靠 ListView 分隔线分界
                 on_click=lambda e, k=idx: self.on_row_click(k),
-                dense=dense,
+                ink=True,
             )
-            new_tiles.append(tile)
+            new_rows.append(row)
+            new_bars.append(bar)
         with self.songs_lock:
             need = len(self.songs)
-        # 同一批 tile 既进 row_controls（高亮用）也进 list_view（显示用）。
-        # 注意：不能先 pop 再 extend 剩余，否则 ListView 收到空列表不显示
+        # 行控件同时进 row_controls（高亮用）与 list_view（显示用）
         added = []
-        while len(self.row_controls) < need and new_tiles:
-            tile = new_tiles.pop(0)
-            self.row_controls.append(tile)
-            added.append(tile)
+        while len(self.row_controls) < need and new_rows:
+            self.row_controls.append(new_rows.pop(0))
+            self.row_bars.append(new_bars.pop(0))
+            added.append(self.row_controls[-1])
         self.list_view.controls.extend(added)
         self._update_highlight()
 
@@ -1188,11 +1325,15 @@ class MusicApp:
             return
         self._fail_streak = 0
 
-        # 更新播放条
-        self.title_text.value = f"{name} - {artist}"
+        # 更新播放条（歌名主、歌手次，时间靠右独立显示）
+        self.title_text.value = name
+        self.artist_text.value = artist or "未知歌手"
         self._duration_ms = self._guess_duration_ms(song.get("duration"))
         self.slider.max = max(1, int(self._duration_ms / 1000)) if self._duration_ms else 100
         self.slider.value = 0
+        self.slider.label = None          # 新歌不保留上一首的拖动气泡
+        self._seeking = False
+        self._seek_seq += 1               # 让上一首拖动的兜底 seek 失效
         self.time_text.value = f"00:00 / {fmt_time(self._duration_ms / 1000)}"
         self._paused_flag = False
         self._want_play = True
@@ -1369,23 +1510,71 @@ class MusicApp:
     # 进度条拖动跳转
     # ------------------------------------------------------------------
     def _on_slider_start(self, e=None):
+        """开始拖动：立刻置位 _seeking，阻断 _on_position_changed 回写"""
         self._seeking = True
+        print("[seek] drag start")
 
-    def _on_slider_end(self, e=None):
-        self._seeking = False
-        if self.audio is None:
-            return
+    def _on_slider_change(self, e=None):
+        """拖动中：暂停位置同步，实时显示目标时间气泡，并启动兜底 seek"""
+        self._seeking = True
         try:
             val = float(e.control.value or 0)
         except Exception:
             return
-        ms = max(0, int(val * 1000))
+        self._seek_target = val
+        self.slider.label = fmt_time(val)      # Slider 自带的拖动气泡
+        self.time_text.value = (
+            f"{fmt_time(val)} / {fmt_time(self._duration_ms / 1000)}")
+        self._seek_seq += 1
+        seq = self._seek_seq
+        # 兜底：个别平台 on_change_end 不触发，0.8 秒无新拖动就自动 seek
+        threading.Thread(
+            target=self._seek_after_idle, args=(seq, val), daemon=True).start()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _seek_after_idle(self, seq, val):
+        time.sleep(0.8)
+        if seq != self._seek_seq or not self._seeking:
+            return                 # 已有新的拖动/已松手，本次作废
+        print("[seek] on_change_end missing, fallback seek")
+        self._perform_seek(val)
+
+    def _on_slider_end(self, e=None):
+        """松手：取消兜底并执行 seek"""
+        self._seek_seq += 1
+        try:
+            val = float(e.control.value or 0)
+        except Exception:
+            val = self._seek_target or 0
+        self._perform_seek(val)
+
+    def _perform_seek(self, seconds):
+        """执行跳转：清气泡、恢复位置同步、刷新时间与歌词高亮"""
+        seconds = max(0.0, float(seconds or 0))
+        self._seeking = False
+        self.slider.label = None
+        self.slider.value = min(seconds, float(self.slider.max or 1))
+        self.time_text.value = (
+            f"{fmt_time(seconds)} / {fmt_time(self._duration_ms / 1000)}")
+        self._sync_lyric(seconds)              # 立即按目标位置高亮，不等下一个事件
+        try:
+            self.page.update()
+        except Exception:
+            pass
+        if self.audio is None:
+            return
+        ms = int(seconds * 1000)
         try:
             self.audio.seek(ms)
+            print(f"[seek] seek to {ms}ms")
         except Exception:
             try:
                 from datetime import timedelta
                 self.audio.seek(timedelta(milliseconds=ms))
+                print(f"[seek] seek(timedelta) to {ms}ms")
             except Exception as ex:
                 self._set_status(f"跳转失败: {ex}")
 
